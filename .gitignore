@@ -6,6 +6,8 @@ build/
 dist/
 firmware/
 firmware-result
+firmware-bridge-result
+firmware-*-result
 result
 result-*
 *.img

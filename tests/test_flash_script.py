@@ -10,6 +10,8 @@ from pathlib import Path
 
 from check_firmware_pins import check_pins, read_pins
 
+from mx5_update.artifact import specialize_flasher
+
 SCRIPT = Path(__file__).parents[1] / "scripts" / "mx5-flash"
 
 
@@ -102,6 +104,29 @@ class FlashScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls()), 7)
         self.assertTrue(all(call["tool"] == "fastboot" for call in self.calls()))
+
+    def test_generated_bridge_flasher_checks_its_own_embedded_pins(self):
+        self.use_real_checksums()
+        stock_source = self.script.read_text()
+        stock_pins = read_pins(self.script)
+        (self.firmware / "rootfs.img").write_bytes(b"bridge rootfs")
+        patched = dict(stock_pins)
+        patched["rootfs.img"] = hashlib.sha256(b"bridge rootfs").hexdigest()
+        # The stock script rejects the modified rootfs before touching Fastboot.
+        self.assertNotEqual(self.run_script().returncode, 0)
+        self.assertEqual(self.calls(), [])
+        self.script.write_text(specialize_flasher(stock_source, stock_pins, patched))
+        check_pins(self.script, self.firmware)
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual(len(self.device_commands()), 6)
+        self.log.unlink()
+        # Replacing runtime manifests does not authorise a different image.
+        (self.firmware / "rootfs.img").write_bytes(b"untrusted")
+        (self.firmware / "SHA256SUMS").write_text(
+            hashlib.sha256(b"untrusted").hexdigest() + "  rootfs.img\n",
+        )
+        self.assertNotEqual(self.run_script().returncode, 0)
+        self.assertEqual(self.calls(), [])
 
     def test_real_checksums_reject_modified_or_missing_images(self):
         self.use_real_checksums()

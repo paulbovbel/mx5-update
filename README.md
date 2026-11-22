@@ -1,54 +1,99 @@
 # mx5-update
 
-Update HeadRush MX5 firmware from Linux, without Windows or Wine.
-Python validates and extracts the firmware. A short shell script runs the
-standard Android `fastboot` commands documented in the [flashing runbook](docs/flashing.md).
+Flash HeadRush MX5 firmware from Linux, without Windows or Wine. Supports the
+exact official **MX5 v2.7** bundle, optionally patched with
+[MX-Edit Bridge](https://github.com/TicT4x/MX-Edit) and
+[NAM](https://github.com/lolgab/mods-for-legacy-headrush).
 
-**Supported firmware: the exact official MX5 v2.7 bundle.** A successful update
-was reported with the earlier direct-USB backend. The shell sequence has offline
-tests; the Fastboot CLI has passed read-only checks but has not reflashed hardware.
-Other models, firmware versions, and hardware revisions are not validated. This is an independent
-project, not supported by HeadRush or inMusic.
+Independent project, not supported by HeadRush or inMusic. Fastboot has passed
+read-only device checks; the current flashing sequence and mod combinations
+have **not been hardware-tested**. Other devices and firmware are unsupported.
 
-## Before you start
+## Before flashing
 
-1. Back up all rigs, setlists, presets, loops, and impulse responses.
-2. Connect the MX5's external power supply and a reliable USB data cable.
-   Keep power and USB connected, and prevent computer suspend during flashing.
-3. On the pedal, select **⋯ → Global Settings → ⋯ → Firmware Update → OK**.
+- Back up rigs, setlists, presets, loops and impulse responses.
+- Use the MX5 power supply and a reliable USB data cable. Prevent computer suspend.
+- Enter **⋯ → Global Settings → ⋯ → Firmware Update → OK** on the pedal.
+- Connect only one Fastboot device and complete the
+  [read-only checks](docs/flashing.md#read-only-checks): power must be `ac`,
+  rootfs `ext4`, and the download limit at least 300 MiB.
 
-Choose **one** installation method below. Connect only one Fastboot device;
-`mx5-flash` discovers its serial automatically and verifies the MX5 USB identity.
-**`mx5-flash` writes immediately, without a confirmation prompt.**
+**All flasher commands write immediately, without confirmation. An interrupted
+or incorrect update can leave the pedal unbootable.**
 
-## Option 1: native Python / pip
+## Nix
 
-### Install
+Requires Linux and Nix with flakes enabled. Nix supplies the tools and downloads
+the official firmware; no manual download or Python installation is needed.
 
-You need Linux, Python 3.11+, Git, Bash, `sha256sum` (coreutils), Android SDK
-Platform-Tools (`fastboot`), and 7-Zip (`7zz` or `7z`).
-Install these with your distribution's package manager.
-For example, on a recent Debian/Ubuntu system:
+```sh
+git clone https://github.com/paulbovbel/mx5-update.git
+cd mx5-update
+nix build .#firmware --out-link firmware-result
+```
+
+Inspect `firmware-result/share/mx5-update/manifest.json` and complete the runbook
+checks. Use `nix run .#fastboot -- …` for its Fastboot commands. Then flash stock:
+
+```sh
+nix run .#flash
+```
+
+### Optional mod profiles
+
+Stock remains the default. Choose a build output and its matching flasher:
+
+| Firmware | Build output | Flasher app |
+| --- | --- | --- |
+| Stock | `firmware` | `flash` |
+| MX-Edit bridge | `firmware-bridge` | `flash-bridge` |
+| NAM, 2 instances | `firmware-nam` | `flash-nam` |
+| NAM + bridge, 2 instances | `firmware-nam-bridge` | `flash-nam-bridge` |
+| NAM, up to 4 instances | `firmware-nam-4` | `flash-nam-4` |
+| NAM + bridge, up to 4 instances | `firmware-nam-bridge-4` | `flash-nam-bridge-4` |
+
+Stock and bridge builds support x86_64 and aarch64 Linux. **NAM builds require
+x86_64 Linux** because of the pinned ARM cross-toolchain. No Docker is needed.
+
+For example, build NAM + bridge without accessing USB:
+
+```sh
+nix build .#firmware-nam-bridge --out-link firmware-nam-bridge-result
+cat firmware-nam-bridge-result/share/mx5-update/manifest.json
+```
+
+After backups and the runbook checks, flash that exact build:
+
+```sh
+./firmware-nam-bridge-result/bin/mx5-flash-nam-bridge
+```
+
+Important differences:
+
+- **NAM replaces Anxiety OD in every rig.** Four-instance builds also replace
+  Anxiety OD V2; two-instance builds leave V2 intact. Put `.nam` models in the
+  device's `NAM` folder following the [upstream instructions](https://github.com/lolgab/mods-for-legacy-headrush#loading-models).
+  Pedalboard-only additive pedals, reverb and page-turner mods are not enabled.
+- **Bridge enables live USB-MIDI editing.** Run MX-Edit separately; its GUI is
+  not bundled here. The bridge permits unauthenticated root shell commands over
+  USB MIDI, so connect only trusted computers/software.
+- Mod outputs contain raw images, a provenance manifest and a build-specific
+  flasher, not a repacked `Update.img`. Keep each build's images and flasher
+  together; filesystem timestamps can change hashes between rebuilds.
+
+## Native Python / pip
+
+For stock firmware without Nix, install Python 3.11+, Git, Bash, coreutils,
+Android `fastboot` and 7-Zip (`7zz` or `7z`). On recent Debian/Ubuntu:
 
 ```sh
 sudo apt install git python3-venv fastboot 7zip
-```
-
-Install the Python package in a virtual environment:
-
-```sh
 git clone https://github.com/paulbovbel/mx5-update.git
 cd mx5-update
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
 ```
-
-This installs `mx5-extract-firmware` (validated extraction) and `mx5-flash` (shell script).
-There are no third-party Python runtime dependencies.
-Reactivate `.venv` when returning in a new shell.
-
-### Download and extract firmware
 
 Download **HeadRush MX5 – Firmware Updater v2.7.0 (Win)** from the
 [official downloads page](https://www.headrushfx.com/downloads.html), then:
@@ -59,128 +104,66 @@ mx5-extract-firmware \
   --output ./firmware
 ```
 
-The EXE is extracted, never executed. The new `firmware` directory contains
-the validated `Update.img`, three decompressed partition images, a JSON manifest,
-and `SHA256SUMS`.
-Existing output directories are never overwritten.
-
-### Check and update
-
-```sh
-fastboot devices
-SERIAL=$(fastboot devices | cut -f1)
-fastboot -s "$SERIAL" getvar power-source
-fastboot -s "$SERIAL" getvar partition-type:rootfs
-fastboot -s "$SERIAL" getvar max-download-size
-```
-
-Verify the responses and other prerequisites in the
-[runbook](docs/flashing.md#read-only-checks) before proceeding. Power must be `ac`,
-rootfs must be `ext4`, and the download limit must be at least 300 MiB.
+Extraction never executes the EXE or accesses USB, and refuses existing output
+directories. After backups and the runbook checks:
 
 ```sh
 mx5-flash ./firmware
 ```
 
-## Option 2: Nix
+## Validation and recovery
 
-You need Linux and Nix with flakes enabled. Nix supplies Python, Fastboot, 7-Zip,
-and the firmware; no pip installation or manual firmware download is needed.
-Packages are available for `x86_64-linux` and `aarch64-linux`.
+The builder validates pinned stock firmware, applies selected mods in
+**NAM → bridge** order, checks filesystem integrity and file read-back, and
+records source revisions and hashes. NAM libraries are checked for ARM32
+hard-float and glibc requirements no newer than the device's 2.32.
+These checks establish build integrity, not hardware safety.
 
-```sh
-git clone https://github.com/paulbovbel/mx5-update.git
-cd mx5-update
-nix build .#firmware --out-link firmware-result
-nix run .#fastboot -- devices
-SERIAL=$(nix run .#fastboot -- devices | cut -f1)
-nix run .#fastboot -- -s "$SERIAL" getvar power-source
-nix run .#fastboot -- -s "$SERIAL" getvar partition-type:rootfs
-nix run .#fastboot -- -s "$SERIAL" getvar max-download-size
-```
-
-The firmware build downloads the official ZIP from HeadRush's CDN, checks its
-pinned SHA-256, extracts it without executing Windows code, and validates the
-firmware and the flashing script's raw-image pins. To inspect its metadata:
-
-```sh
-cat firmware-result/share/mx5-update/manifest.json
-```
-
-After verifying the [runbook checks](docs/flashing.md#read-only-checks) and backing up:
-
-```sh
-nix run .#flash
-```
-
-Optional build outputs:
-
-```sh
-nix build .                         # result/bin/{mx5-extract-firmware,mx5-flash}
-ls firmware-result/share/mx5-update # Bundle, raw images, manifest
-nix run .#extract-firmware -- /path/to/updater.zip --output ./firmware # Optional local extraction
-```
-
-Firmware is proprietary and fetched from the vendor, not committed here.
-The flake allows only this named unfree firmware package and disables
-substitution for its extraction derivation; this grants no redistribution rights.
-
-## What to expect
-
-`mx5-extract-firmware SOURCE --output DIRECTORY` never accesses USB. Device checks are explicit
-Fastboot commands in the runbook, not Python code.
-
-`mx5-flash` checks the three raw images against embedded SHA-256 pins and
-requires exactly one Fastboot device, whose detected serial must match one USB
-`0763:301a` device in sysfs. It does not trust
-a supplied manifest. **Power, partition, and buffer checks are manual**—complete
-the runbook first. The script writes only `splash`, `recoverysplash`, and `rootfs`,
-then sends `reboot` after all writes succeed. After startup, verify **v2.7**
-in Global Settings.
+Flashers verify embedded image hashes and the MX5's USB identity (`0763:301a`),
+then write only `splash`, `recoverysplash` and `rootfs`. They do not trust runtime
+manifests. **Power, partition and buffer checks remain manual.** There is no
+post-write read-back, automatic retry/resume, bootloader flashing or factory reset.
+Verify v2.7 in Global Settings after startup.
 
 If a write fails, **keep the pedal powered in update mode; do not reboot or
-retry blindly**. Recover with the official Windows/macOS updater. If only the
-reboot acknowledgment fails, the CLI reports that separately; check the pedal's
-display/state before acting.
+retry blindly**. Use the official Windows/macOS updater for recovery. A failed
+reboot acknowledgement is reported separately; check the pedal before acting.
+To return to stock, enter update mode and use the stock flashing path.
+If normal startup fails, upstream documents **footswitches 1 + 2 at power-on**
+for recovery mode. **2 + 3 is a factory reset that erases rigs.**
 
-There is no post-write read-back verification, automatic retry/resume, sparse
-transfer support, bootloader flashing, or factory reset. An interrupted update
-can leave the pedal unbootable. See the [protocol notes](docs/protocol.md) and
-[official-updater audit](docs/native-updater-audit.md) for details.
+Firmware is proprietary, downloaded from the vendor and built locally with
+substitution disabled. It is not committed here; no redistribution rights are granted.
+See the [runbook](docs/flashing.md), [protocol notes](docs/protocol.md) and
+[updater audit](docs/native-updater-audit.md) for details.
 
-## Troubleshooting USB access
+## USB permissions
 
-Update mode uses USB `0763:301a`, often named `Miniboard`; normal audio mode
-(`0763:401a`) cannot be flashed.
-
-If Fastboot reports a permission error on a systemd/udev desktop, an
-administrator can add:
+Update mode uses `0763:301a` (often named `Miniboard`); normal audio mode
+`0763:401a` cannot be flashed. For permission errors on a systemd/udev desktop,
+an administrator can add `/etc/udev/rules.d/70-headrush-mx5.rules`:
 
 ```udev
-# /etc/udev/rules.d/70-headrush-mx5.rules
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0763", ATTR{idProduct}=="301a", TAG+="uaccess"
 ```
 
-Reload udev rules and reconnect the cable. NixOS users should declare the
-equivalent udev rule in their system configuration. Do not run the updater as root.
+Reload udev rules and reconnect. NixOS users should declare the equivalent rule
+in their system configuration. **Do not run the updater as root.**
 
 ## Development
 
 ```sh
-python3 -m unittest discover -s tests -v
-# Or with the Nix development environment:
-nix develop --command python -m unittest discover -s tests -v
+nix develop --command python -m unittest discover -s tests
 nix develop --command ruff check .
 nix develop --command shellcheck scripts/mx5-flash
 nix flake check
 ```
 
-Unit tests use synthetic firmware, sysfs fixtures, fake Fastboot, and both real
-and fake checksum tools; they never touch hardware. Flake checks also
-download/extract the pinned firmware, verify the script's pins against the raw
-images, and smoke-test the packaged commands without accessing USB. Pip CI
-checks the installed package for removed modules and exercises its entry point
-on synthetic firmware outside the source tree.
+Tests never access hardware. Flake checks also build every supported firmware
+profile for the host system. Python has no third-party runtime dependencies;
+without Nix, run tests with `python3 -m unittest discover -s tests`.
 
-Fastboot owns USB framing, partial transfers, acknowledgments, and timeouts.
-There is no custom Python Fastboot backend or process supervisor.
+The mod pipeline is in `mx5_update/compose.py`, with adapters in
+`mx5_update/mods/` and pinned sources/tools in `nix/mods/`. Profiles are explicit
+adapter sequences, not dynamically loaded plugins. Filesystem operations and
+artifact generation are shared; Fastboot flashing remains a separate shell script.

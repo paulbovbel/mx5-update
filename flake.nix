@@ -37,10 +37,35 @@
               && !(pkgs.lib.hasSuffix ".egg-info" name);
           };
           firmware = pkgs.callPackage ./nix/firmware.nix { inherit source; };
+          bridgeSource = pkgs.callPackage ./nix/mods/bridge-source.nix { };
+          namTool = pkgs.callPackage ./nix/mods/nam.nix { };
+          composed =
+            profile: instances:
+            pkgs.callPackage ./nix/composed-firmware.nix {
+              inherit source firmware bridgeSource namTool profile instances;
+            };
+          variants = {
+            bridge = composed "bridge" 2;
+          } // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            nam = composed "nam" 2;
+            nam-bridge = composed "nam-bridge" 2;
+            nam-4 = composed "nam" 4;
+            nam-bridge-4 = composed "nam-bridge" 4;
+          };
+          modFirmware = pkgs.lib.mapAttrs' (
+            name: firmware: pkgs.lib.nameValuePair "firmware-${name}" firmware
+          ) variants;
+          modApps = pkgs.lib.mapAttrs' (
+            name: firmware: pkgs.lib.nameValuePair "flash-${name}" {
+              type = "app";
+              program = "${firmware}/bin/${firmware.flashCommand}";
+              meta.description = "Flash experimental ${name} firmware";
+            }
+          ) variants;
           package = pkgs.callPackage ./nix/package.nix { inherit source firmware; };
         in
         {
-          inherit pkgs firmware package;
+          inherit pkgs firmware package modFirmware modApps;
         };
     in
     {
@@ -53,7 +78,7 @@
           default = env.package;
           mx5-update = env.package;
           firmware = env.firmware;
-        }
+        } // env.modFirmware
       );
 
       apps = eachSystem (
@@ -79,13 +104,13 @@
             program = "${env.pkgs.android-tools}/bin/fastboot";
             meta.description = "Android Fastboot CLI for manual device checks";
           };
-        }
+        } // env.modApps
       );
 
       checks = eachSystem (system: {
         package = self.packages.${system}.mx5-update;
         firmware = self.packages.${system}.firmware;
-      });
+      } // (forSystem system).modFirmware);
 
       devShells = eachSystem (
         system:
