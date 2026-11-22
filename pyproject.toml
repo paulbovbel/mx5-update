@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mx5-update"
 version = "0.1.0"
-description = "Native Linux firmware updater for the HeadRush MX5"
+description = "Validated firmware extraction and Fastboot flashing tools for the HeadRush MX5"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -15,7 +15,10 @@ Repository = "https://github.com/paulbovbel/mx5-update"
 Documentation = "https://github.com/paulbovbel/mx5-update#readme"
 
 [project.scripts]
-mx5-update = "mx5_update.cli:main"
+mx5-extract-firmware = "mx5_update.extract:main"
 
 [tool.setuptools.packages.find]
 include = ["mx5_update*"]
+
+[tool.setuptools]
+script-files = ["scripts/mx5-flash"]

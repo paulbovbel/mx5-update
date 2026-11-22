@@ -12,6 +12,7 @@ from mx5_update.bundle import (
     EXPECTED_SIZES,
     Bundle,
     BundleError,
+    Image,
     decompress,
     extract_container,
     extract_firmware,
@@ -172,8 +173,10 @@ class BundleTests(unittest.TestCase):
             with (
                 patch("mx5_update.bundle.KNOWN_SHA256", hashlib.sha256(data).hexdigest()),
                 patch.dict(EXPECTED_SIZES, {name: 4 for name in EXPECTED_SIZES}),
+                patch.object(Image, "unpack", autospec=True, side_effect=Image.unpack) as unpack,
             ):
                 extract_firmware(source, output)
+            self.assertEqual(unpack.call_count, len(EXPECTED_SIZES))
             self.assertEqual((output / "Update.img").read_bytes(), data)
             for partition in EXPECTED_SIZES:
                 self.assertEqual((output / f"{partition}.img").read_bytes(), b"test")
@@ -181,6 +184,11 @@ class BundleTests(unittest.TestCase):
             self.assertEqual(manifest["version"], "2.7")
             self.assertEqual(manifest["sha256"], hashlib.sha256(data).hexdigest())
             self.assertEqual([image["bytes"] for image in manifest["images"]], [4, 4, 4])
+            checksums = (output / "SHA256SUMS").read_text().splitlines()
+            self.assertEqual(checksums, [
+                f"{hashlib.sha256(b'test').hexdigest()}  {partition}.img"
+                for partition in EXPECTED_SIZES
+            ])
             self.assertEqual(set(Path(directory).iterdir()), {source, output})
 
     def test_extract_firmware_failure_leaves_no_partial_output(self):
@@ -191,6 +199,20 @@ class BundleTests(unittest.TestCase):
             with self.assertRaises(BundleError):
                 extract_firmware(source, output)
             self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [source])
+
+    def test_late_image_failure_leaves_no_partial_output(self):
+        data = fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.img"
+            source.write_bytes(data)
+            output = Path(directory) / "firmware"
+            with (
+                patch("mx5_update.bundle.KNOWN_SHA256", hashlib.sha256(data).hexdigest()),
+                patch.dict(EXPECTED_SIZES, splash=4, recoverysplash=4, rootfs=5),
+                self.assertRaisesRegex(BundleError, "decompressed size"),
+            ):
+                extract_firmware(source, output)
             self.assertEqual(list(Path(directory).iterdir()), [source])
 
     def test_extract_firmware_does_not_replace_existing_directory(self):

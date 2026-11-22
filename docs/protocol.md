@@ -90,23 +90,44 @@ This is independently written behavior documentation, not copied vendor code.
 
 ## Implementation and hardware validation
 
-The native tool uses the standard Fastboot wire protocol itself, not an
-installed Android `fastboot` executable. This avoids Windows driver issues
-and gives a transport-level read-only mode.
+The Python package now only validates and extracts firmware, emitting metadata
+in `manifest.json`; its CLI is `mx5-extract-firmware SOURCE --output DIRECTORY`.
+It contains no USB access, Fastboot implementation, subprocess supervisor, or
+device commands. The original ctypes/libusb backend and subsequent Python
+Fastboot adapter have both been removed.
+
+[`scripts/mx5-flash`](../scripts/mx5-flash) implements the documented
+[runbook](flashing.md) with standard `fastboot` calls under `set -Eeuo pipefail`.
+Python extraction also emits raw-image `SHA256SUMS` for inspection; the script
+checks its own embedded raw-image SHA-256 pins, rather than trusting that file.
 
 This implementation sends complete **raw** payloads when the reported limit
 permits them. A deeper audit confirms that the vendor updater also selects
 raw transfers when the decompressed image fits its download buffer; sparse
 framing is its overflow path, not mandatory on this bootloader.
-The unlock/erase/download/flash sequence agrees statically for this bundle.
-Following the audit, successful short payload writes continue at the actual
-transferred offset, response timeouts reset after progress packets, and a
-`reboot` command is sent only after all three writes are acknowledged.
-Fastboot command writes remain single-transfer and fail on a short write.
-A successful MX5 firmware update to v2.7 has subsequently been reported using
-this sequence. This validates a real update on one device, not every hardware
-revision, failure/recovery case, or the unsupported sparse-transfer path.
-The tool does not claim complete vendor parity. See the
+The CLI is invoked as `fastboot -s SERIAL …`; writes use
+`-S 0 --skip-reboot flash PARTITION IMAGE`. All raw images must fit the device's
+download limit; power, partition type, buffer size, and Android slot/logical
+properties are **manual prerequisites** in the runbook, not parsed in Python
+or the script. Some Fastboot versions print failed `getvar` queries while
+returning zero, so the operator must verify the printed values.
+
+The script captures the serial from `fastboot devices`, rejecting empty,
+ambiguous, malformed, or network targets. It checks Linux sysfs once before
+unlocking and accepts only one `0763:301a` device matching that serial. Only the final successful
+write is followed by a separate `reboot` invocation. Failed mutating commands
+are not ignored, including unknown OEM-command errors.
+
+Fastboot owns USB framing, partial transfers, acknowledgments, and timeouts;
+these are not overridden or claimed identical to the vendor's implementation.
+There is no process supervisor or automatic reconnect/retry. Fastboot can wait
+indefinitely for a disconnected device; the runbook explains how to handle that.
+
+A successful hardware update was reported using the earlier direct-USB
+backend. Read-only checks passed on an MX5 using both Fastboot 35.0.2 and the
+Nix-packaged Fastboot. The current shell script has offline command-sequence
+and failure-path tests; it has not reflashed hardware.
+The tool does not claim complete vendor parity. See the historical
 [native-updater comparison](native-updater-audit.md) for evidence and limits.
 
 No flash should be performed merely to test detection. A real flash requires

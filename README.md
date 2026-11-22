@@ -1,12 +1,14 @@
 # mx5-update
 
 Update HeadRush MX5 firmware from Linux, without Windows or Wine.
-The tool talks directly to the pedal's Fastboot interface through libusb.
+Python validates and extracts the firmware. A short shell script runs the
+standard Android `fastboot` commands documented in the [flashing runbook](docs/flashing.md).
 
 **Supported firmware: the exact official MX5 v2.7 bundle.** A successful update
-has been reported on an MX5; other models, firmware versions, and hardware
-revisions are not validated. This is an independent project, not supported by
-HeadRush or inMusic.
+was reported with the earlier direct-USB backend. The shell sequence has offline
+tests; the Fastboot CLI has passed read-only checks but has not reflashed hardware.
+Other models, firmware versions, and hardware revisions are not validated. This is an independent
+project, not supported by HeadRush or inMusic.
 
 ## Before you start
 
@@ -15,20 +17,21 @@ HeadRush or inMusic.
    Keep power and USB connected, and prevent computer suspend during flashing.
 3. On the pedal, select **⋯ → Global Settings → ⋯ → Firmware Update → OK**.
 
-Choose **one** installation method below. In either workflow, replace
-`YOUR_USB_SERIAL` with the serial printed by `probe`.
-**`flash` writes immediately, without a confirmation prompt.**
+Choose **one** installation method below. Connect only one Fastboot device;
+`mx5-flash` discovers its serial automatically and verifies the MX5 USB identity.
+**`mx5-flash` writes immediately, without a confirmation prompt.**
 
 ## Option 1: native Python / pip
 
 ### Install
 
-You need Linux, Python 3.11+, Git, the libusb-1.0 shared library, and
-7-Zip (`7zz` or `7z`). Install these with your distribution's package manager.
+You need Linux, Python 3.11+, Git, Bash, `sha256sum` (coreutils), Android SDK
+Platform-Tools (`fastboot`), and 7-Zip (`7zz` or `7z`).
+Install these with your distribution's package manager.
 For example, on a recent Debian/Ubuntu system:
 
 ```sh
-sudo apt install git python3-venv libusb-1.0-0 7zip
+sudo apt install git python3-venv fastboot 7zip
 ```
 
 Install the Python package in a virtual environment:
@@ -41,8 +44,9 @@ python3 -m venv .venv
 python -m pip install .
 ```
 
-The installed command is `mx5-update`; there are no third-party Python runtime
-dependencies. Reactivate `.venv` when returning in a new shell.
+This installs `mx5-extract-firmware` (validated extraction) and `mx5-flash` (shell script).
+There are no third-party Python runtime dependencies.
+Reactivate `.venv` when returning in a new shell.
 
 ### Download and extract firmware
 
@@ -50,57 +54,71 @@ Download **HeadRush MX5 – Firmware Updater v2.7.0 (Win)** from the
 [official downloads page](https://www.headrushfx.com/downloads.html), then:
 
 ```sh
-mx5-update extract \
+mx5-extract-firmware \
   "$HOME/Downloads/HeadRush MX5 2.7 Firmware Updater - Win.exe.zip" \
   --output ./firmware
 ```
 
 The EXE is extracted, never executed. The new `firmware` directory contains
-the validated `Update.img`, three decompressed partition images, and a manifest.
+the validated `Update.img`, three decompressed partition images, a JSON manifest,
+and `SHA256SUMS`.
 Existing output directories are never overwritten.
 
 ### Check and update
 
 ```sh
-mx5-update probe
-mx5-update check ./firmware/Update.img --serial YOUR_USB_SERIAL
+fastboot devices
+SERIAL=$(fastboot devices | cut -f1)
+fastboot -s "$SERIAL" getvar power-source
+fastboot -s "$SERIAL" getvar partition-type:rootfs
+fastboot -s "$SERIAL" getvar max-download-size
 ```
 
-After `check` passes and you have a backup:
+Verify the responses and other prerequisites in the
+[runbook](docs/flashing.md#read-only-checks) before proceeding. Power must be `ac`,
+rootfs must be `ext4`, and the download limit must be at least 300 MiB.
 
 ```sh
-mx5-update flash ./firmware/Update.img --serial YOUR_USB_SERIAL
+mx5-flash ./firmware
 ```
 
 ## Option 2: Nix
 
-You need Linux and Nix with flakes enabled. Nix supplies Python, libusb, 7-Zip,
+You need Linux and Nix with flakes enabled. Nix supplies Python, Fastboot, 7-Zip,
 and the firmware; no pip installation or manual firmware download is needed.
 Packages are available for `x86_64-linux` and `aarch64-linux`.
 
 ```sh
 git clone https://github.com/paulbovbel/mx5-update.git
 cd mx5-update
-nix run . -- probe
-nix run . -- check --serial YOUR_USB_SERIAL
+nix build .#firmware --out-link firmware-result
+nix run .#fastboot -- devices
+SERIAL=$(nix run .#fastboot -- devices | cut -f1)
+nix run .#fastboot -- -s "$SERIAL" getvar power-source
+nix run .#fastboot -- -s "$SERIAL" getvar partition-type:rootfs
+nix run .#fastboot -- -s "$SERIAL" getvar max-download-size
 ```
 
-The first run downloads the official ZIP from HeadRush's CDN, checks its pinned
-SHA-256, extracts it without executing Windows code, and validates the firmware.
-The packaged CLI uses this `Update.img` in the Nix store by default.
-
-After `check` passes and you have a backup:
+The firmware build downloads the official ZIP from HeadRush's CDN, checks its
+pinned SHA-256, extracts it without executing Windows code, and validates the
+firmware and the flashing script's raw-image pins. To inspect its metadata:
 
 ```sh
-nix run . -- flash --serial YOUR_USB_SERIAL
+cat firmware-result/share/mx5-update/manifest.json
+```
+
+After verifying the [runbook checks](docs/flashing.md#read-only-checks) and backing up:
+
+```sh
+nix run .#flash
 ```
 
 Optional build outputs:
 
 ```sh
-nix build .                         # result/bin/mx5-update
-nix build .#firmware --out-link firmware-result
+nix build .                         # result/bin/{mx5-extract-firmware,mx5-flash}
 ls firmware-result/share/mx5-update # Bundle, raw images, manifest
+nix run .#extract-firmware -- /path/to/updater.zip --output ./firmware # Optional local extraction
 ```
 
 Firmware is proprietary and fetched from the vendor, not committed here.
@@ -109,13 +127,16 @@ substitution for its extraction derivation; this grants no redistribution rights
 
 ## What to expect
 
-`probe` and `check` are read-only; they never unlock, erase, flash, or reboot.
-`extract`, `inspect`, and `plan` never access USB. Use `--help` for all commands.
+`mx5-extract-firmware SOURCE --output DIRECTORY` never accesses USB. Device checks are explicit
+Fastboot commands in the runbook, not Python code.
 
-`flash` validates the whole bundle and checks the selected device, external
-power, partition types, and transfer limits before writing. It writes only
-`splash`, `recoverysplash`, and `rootfs`, then sends `reboot` after all three
-writes are acknowledged. After startup, verify **v2.7** in Global Settings.
+`mx5-flash` checks the three raw images against embedded SHA-256 pins and
+requires exactly one Fastboot device, whose detected serial must match one USB
+`0763:301a` device in sysfs. It does not trust
+a supplied manifest. **Power, partition, and buffer checks are manual**—complete
+the runbook first. The script writes only `splash`, `recoverysplash`, and `rootfs`,
+then sends `reboot` after all writes succeed. After startup, verify **v2.7**
+in Global Settings.
 
 If a write fails, **keep the pedal powered in update mode; do not reboot or
 retry blindly**. Recover with the official Windows/macOS updater. If only the
@@ -132,7 +153,8 @@ can leave the pedal unbootable. See the [protocol notes](docs/protocol.md) and
 Update mode uses USB `0763:301a`, often named `Miniboard`; normal audio mode
 (`0763:401a`) cannot be flashed.
 
-For `LIBUSB_ERROR_ACCESS` on a systemd/udev desktop, an administrator can add:
+If Fastboot reports a permission error on a systemd/udev desktop, an
+administrator can add:
 
 ```udev
 # /etc/udev/rules.d/70-headrush-mx5.rules
@@ -142,9 +164,6 @@ SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0763", ATTR{idPro
 Reload udev rules and reconnect the cable. NixOS users should declare the
 equivalent udev rule in their system configuration. Do not run the updater as root.
 
-For native Python installations where libusb is not discovered automatically,
-set `MX5_LIBUSB=/absolute/path/to/libusb-1.0.so`. The Nix package sets it for you.
-
 ## Development
 
 ```sh
@@ -152,9 +171,16 @@ python3 -m unittest discover -s tests -v
 # Or with the Nix development environment:
 nix develop --command python -m unittest discover -s tests -v
 nix develop --command ruff check .
+nix develop --command shellcheck scripts/mx5-flash
 nix flake check
 ```
 
-Unit tests use synthetic firmware and fake USB transports; they never touch
-hardware. Flake checks also download/extract the pinned firmware and smoke-test
-the packaged CLI, without accessing USB.
+Unit tests use synthetic firmware, sysfs fixtures, fake Fastboot, and both real
+and fake checksum tools; they never touch hardware. Flake checks also
+download/extract the pinned firmware, verify the script's pins against the raw
+images, and smoke-test the packaged commands without accessing USB. Pip CI
+checks the installed package for removed modules and exercises its entry point
+on synthetic firmware outside the source tree.
+
+Fastboot owns USB framing, partial transfers, acknowledgments, and timeouts.
+There is no custom Python Fastboot backend or process supervisor.

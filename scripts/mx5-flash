@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Execute docs/flashing.md after its manual read-only checks have passed.
+set -Eeuo pipefail
+
+usage() {
+  echo "Usage: mx5-flash [FIRMWARE_DIRECTORY]"
+  echo "Back up first and follow docs/flashing.md. Flashing starts without a prompt."
+  echo "Requires exactly one Fastboot device; its MX5 USB identity is verified."
+  echo "FIRMWARE_DIRECTORY defaults to MX5_FIRMWARE_DIR in the Nix package."
+}
+if [[ "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+if [[ $# -gt 1 ]]; then
+  usage >&2
+  exit 2
+fi
+directory=${1:-${MX5_FIRMWARE_DIR:-}}
+if [[ -z "$directory" ]]; then
+  usage >&2
+  exit 2
+fi
+command -v fastboot >/dev/null
+command -v sha256sum >/dev/null
+cd -- "$directory"
+
+# Pins cover raw images, not a user-supplied manifest or arbitrary file names.
+sha256sum --check --strict <<'CHECKSUMS'
+a9723d5511ebd69ffc6a8204f6f6444d107e3b561feeec30876a98f1c59f27ce  splash.img
+740d594b1ea4dbe794483bf2eee14b68da749c106e4533049a30c221708448ed  recoverysplash.img
+cdaf43d609f44266eaa008e6d52edc3a5a0e4b92d8e3e20191aa386920d944bc  rootfs.img
+CHECKSUMS
+
+# Capture status directly: process substitution would hide enumeration failures.
+if ! devices=$(fastboot devices); then
+  echo "Failed to list Fastboot devices; no writes started." >&2
+  exit 1
+fi
+# Android tools can print either "fastboot" or the USB interface label.
+read -r serial state <<< "$devices"
+if [[ "$devices" == *$'\n'* || ( "$state" != "fastboot" && "$state" != "Android Fastboot" ) || ! "$serial" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+  echo "Expected exactly one USB Fastboot device. Disconnect other devices and check fastboot devices." >&2
+  exit 1
+fi
+
+# Never pass an unrelated Android device or network address to Fastboot.
+matches=0
+for device in /sys/bus/usb/devices/*; do
+  [[ -r "$device/idVendor" && -r "$device/idProduct" && -r "$device/serial" ]] || continue
+  read -r vendor < "$device/idVendor"
+  read -r product < "$device/idProduct"
+  read -r usb_serial < "$device/serial"
+  if [[ "$vendor:$product:$usb_serial" == "0763:301a:$serial" ]]; then
+    matches=$((matches + 1))
+  fi
+done
+if [[ "$matches" -ne 1 ]]; then
+  echo "Expected one MX5 in update mode with serial $serial; found $matches." >&2
+  exit 1
+fi
+
+echo "Using MX5 USB serial $serial."
+trap 'echo "Stopped. If writes began, keep the MX5 powered in update mode; do not reboot or retry blindly." >&2' ERR
+fastboot -s "$serial" oem inmusic-unlock-magic-7de5fbc22b8c524e
+fastboot -s "$serial" -S 0 --skip-reboot flash splash splash.img
+fastboot -s "$serial" -S 0 --skip-reboot flash recoverysplash recoverysplash.img
+fastboot -s "$serial" erase rootfs
+fastboot -s "$serial" -S 0 --skip-reboot flash rootfs rootfs.img
+if ! fastboot -s "$serial" reboot; then
+  echo "All three writes completed, but reboot was not acknowledged. Check the pedal; do not automatically reflash." >&2
+  exit 1
+fi
+echo "Reboot acknowledged. Verify v2.7 in Global Settings after startup."

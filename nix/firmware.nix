@@ -27,7 +27,9 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     export PYTHONPATH=${source}
-    python3 -m mx5_update extract "$src" --output "$out/share/mx5-update"
+    python3 -m mx5_update "$src" --output "$out/share/mx5-update"
+    python3 ${source}/tests/check_firmware_pins.py \
+      ${source}/scripts/mx5-flash "$out/share/mx5-update"
     runHook postInstall
   '';
 

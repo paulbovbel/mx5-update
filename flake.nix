@@ -1,5 +1,5 @@
 {
-  description = "Native Linux HeadRush MX5 updater and pinned v2.7 firmware";
+  description = "HeadRush MX5 firmware extraction and Fastboot flashing runbook";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -19,7 +19,23 @@
             # Only the explicitly requested vendor firmware is allowed.
             config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "mx5-firmware";
           };
-          source = pkgs.lib.cleanSource self;
+          source = pkgs.lib.cleanSourceWith {
+            src = self;
+            filter =
+              path: type:
+              let
+                name = builtins.baseNameOf path;
+              in
+              pkgs.lib.cleanSourceFilter path type
+              && !(builtins.elem name [
+                ".venv"
+                ".ruff_cache"
+                "__pycache__"
+                "build"
+                "dist"
+              ])
+              && !(pkgs.lib.hasSuffix ".egg-info" name);
+          };
           firmware = pkgs.callPackage ./nix/firmware.nix { inherit source; };
           package = pkgs.callPackage ./nix/package.nix { inherit source firmware; };
         in
@@ -43,15 +59,26 @@
       apps = eachSystem (
         system:
         let
+          env = forSystem system;
           app = {
             type = "app";
-            program = "${self.packages.${system}.mx5-update}/bin/mx5-update";
-            meta.description = "Native Linux HeadRush MX5 updater";
+            program = "${env.package}/bin/mx5-extract-firmware";
+            meta.description = "Validate and extract official HeadRush MX5 firmware";
           };
         in
         {
           default = app;
-          mx5-update = app;
+          extract-firmware = app;
+          flash = {
+            type = "app";
+            program = "${env.package}/bin/mx5-flash";
+            meta.description = "Run the MX5 v2.7 Fastboot flashing sequence";
+          };
+          fastboot = {
+            type = "app";
+            program = "${env.pkgs.android-tools}/bin/fastboot";
+            meta.description = "Android Fastboot CLI for manual device checks";
+          };
         }
       );
 
@@ -69,11 +96,11 @@
           default = env.pkgs.mkShell {
             packages = [
               env.pkgs.python3
-              env.pkgs.libusb1
+              env.pkgs.android-tools
               env.pkgs._7zz
               env.pkgs.ruff
+              env.pkgs.shellcheck
             ];
-            MX5_LIBUSB = "${env.pkgs.lib.getLib env.pkgs.libusb1}/lib/libusb-1.0.so";
             # Deliberately do not depend on firmware: developing/testing the
             # source does not need to download proprietary artifacts.
           };

@@ -1,5 +1,11 @@
 # Comparison with the official MX5 v2.7 updater
 
+> Historical audit of the former direct ctypes/libusb backend. The current
+> implementation is a firmware-only Python helper plus a shell runbook using
+> the Android Fastboot CLI; see [the current implementation notes](protocol.md#implementation-and-hardware-validation).
+> The binary analysis below still informs the MX5-specific write sequence,
+> but its direct-USB timing/transport comparisons are not claims about the CLI.
+
 ## Scope and confidence
 
 Static analysis of the official Windows `FirmwareUpdater.exe`, SHA-256
@@ -157,7 +163,7 @@ audited. Backups remain mandatory.
 The audit originally found short-write, timeout, and reboot differences.
 They have now been addressed and covered by simulated transport tests:
 
-| Area | Official updater | Current native Linux implementation |
+| Area | Official updater | Direct-USB implementation at time of audit |
 | --- | --- | --- |
 | Successful short payload writes | Continues from the actual transferred offset at `0x14011ff82`–`0x14011ffb0` | Continues from the actual transferred offset |
 | Payload chunk size | At most 1 MiB (`0x14011fefa`), also used by XZ buffers | 1 MiB |
@@ -178,11 +184,13 @@ The response loop now mirrors the vendor's inactivity timeout rather than
 aborting an operation that is still producing progress messages. Like the
 vendor, it can keep waiting while valid progress continues.
 
-Tests cover actual ctypes buffer offsets using a fake libusb call, partial
+Tests for the former backend covered ctypes buffer offsets using a fake libusb call, partial
 transfer errors without retries, per-transfer timeouts, more than 1024 progress
 packets, the complete simulated Fastboot wire sequence, success-only reboot,
 failure at every write stage, and uncertain reboot acknowledgment. These tests
-do not require or modify hardware.
+did not require or modify hardware. Those transport-specific tests and the
+subsequent Python CLI adapter have since been removed. Current tests cover the
+shell runbook's checksums, sysfs identity, command order, and failure paths.
 
 ## Bottom line
 
@@ -197,6 +205,11 @@ result on one device, not validation of every hardware revision or recovery
 scenario. It is also not a captured USB trace of an official update.
 Intentional differences remain in safety preflight/power policy and refusing
 unsupported sparse transfers.
+
+The subsequent move to a standard Fastboot shell runbook has not yet been
+validated with a hardware flash; the reported success applies to the earlier backend.
+Power, partition type, and buffer-size verification are now explicit operator
+steps, not automated Python preflight.
 
 ## Reproducing the inspection
 

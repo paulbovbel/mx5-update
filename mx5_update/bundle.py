@@ -136,7 +136,11 @@ class Image:
     sha1: str
 
     def unpack(self) -> bytes:
-        return decompress(self.compressed, EXPECTED_SIZES[self.partition])
+        expected = EXPECTED_SIZES[self.partition]
+        payload = decompress(self.compressed, expected)
+        if len(payload) != expected:
+            raise BundleError(f"Unexpected decompressed size: {self.partition}")
+        return payload
 
 
 @dataclass(frozen=True)
@@ -162,7 +166,8 @@ class Bundle:
         }
 
     @classmethod
-    def load(cls, path: Path) -> "Bundle":
+    def load(cls, path: Path, *, image_directory: Path | None = None) -> "Bundle":
+        """Validate every image, optionally writing it into a private staging directory."""
         if path.stat().st_size > MAX_BUNDLE:
             raise BundleError("Bundle is too large")
         data = path.read_bytes()
@@ -179,8 +184,15 @@ class Bundle:
             raise BundleError("Not an MX5/HG04 image")
         if root.get("inmusic,devices") != bytes.fromhex("0763301a"):
             raise BundleError("Unexpected target USB device")
+        allowed = {"", "/images"}
+        for partition in EXPECTED_SIZES:
+            allowed.update((f"/images/{partition}", f"/images/{partition}/hash"))
+        if set(nodes) != allowed:
+            raise BundleError("Unexpected firmware nodes")
+        description = cstring(root["description"])
         images = []
-        for partition, expected_size in EXPECTED_SIZES.items():
+        checksums = []
+        for partition in EXPECTED_SIZES:
             props = nodes.get(f"/images/{partition}", {})
             hashes = nodes.get(f"/images/{partition}/hash", {})
             if (
@@ -195,19 +207,22 @@ class Bundle:
             if digest1 != hashes.get("value"):
                 raise BundleError(f"Checksum mismatch: {partition}")
             image = Image(partition, compressed, digest1.hex())
-            if len(image.unpack()) != expected_size:
-                raise BundleError(f"Unexpected decompressed size: {partition}")
+            payload = image.unpack()
+            if image_directory is not None:
+                name = f"{partition}.img"
+                (image_directory / name).write_bytes(payload)
+                checksums.append(f"{hashlib.sha256(payload).hexdigest()}  {name}\n")
             images.append(image)
-        allowed = {"", "/images"}
-        for partition in EXPECTED_SIZES:
-            allowed.update((f"/images/{partition}", f"/images/{partition}/hash"))
-        if set(nodes) != allowed:
-            raise BundleError("Unexpected firmware nodes")
-        return cls(digest, cstring(root["description"]), tuple(images))
+            del payload
+        if image_directory is not None:
+            (image_directory / "SHA256SUMS").write_text("".join(checksums))
+        return cls(digest, description, tuple(images))
 
 
-def extract_container(source: Path, destination: Path) -> Bundle:
-    """Extract Update.img only, never execute the vendor's EXE."""
+def extract_container(
+    source: Path, destination: Path, *, image_directory: Path | None = None,
+) -> Bundle:
+    """Extract and validate Update.img, optionally writing raw images; never execute the EXE."""
     if destination.exists():
         raise BundleError(f"Refusing to overwrite {destination}")
     if source.stat().st_size > MAX_BUNDLE:
@@ -245,7 +260,7 @@ def extract_container(source: Path, destination: Path) -> Bundle:
                 raise BundleError("7-Zip extraction timed out") from exc
             except FileNotFoundError as exc:
                 raise BundleError("Install 7zz (7-Zip) to extract the Windows updater") from exc
-        bundle = Bundle.load(target)
+        bundle = Bundle.load(target, image_directory=image_directory)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with destination.open("xb") as output:
             output.write(target.read_bytes())
@@ -260,8 +275,6 @@ def extract_firmware(source: Path, output: Path) -> None:
     with tempfile.TemporaryDirectory(dir=output.parent, prefix=".mx5-") as temp:
         stage = Path(temp) / "firmware"
         stage.mkdir()
-        bundle = extract_container(source, stage / "Update.img")
-        for image in bundle.images:
-            (stage / f"{image.partition}.img").write_bytes(image.unpack())
+        bundle = extract_container(source, stage / "Update.img", image_directory=stage)
         (stage / "manifest.json").write_text(json.dumps(bundle.metadata(), indent=2) + "\n")
         stage.rename(output)

@@ -17,4 +17,5 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -v
       - run: python -m pip install .
-      - run: mx5-update --help
+      - run: python tests/installed_smoke.py
+      - run: bash -n scripts/mx5-flash
