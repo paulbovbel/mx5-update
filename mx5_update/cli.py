@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-from .bundle import EXPECTED_SIZES, Bundle, BundleError, extract_container
+from .bundle import EXPECTED_SIZES, Bundle, BundleError, extract_firmware
 from .fastboot import (
     READ_VARIABLES,
     Fastboot,
@@ -18,6 +18,7 @@ from .usb import USB, USBError
 
 def parser():
     result = argparse.ArgumentParser(description="Linux HeadRush MX5 firmware updater")
+    result.set_defaults(bundle=None)
     commands = result.add_subparsers(dest="command", required=True)
     default_bundle = os.environ.get("MX5_FIRMWARE")
 
@@ -30,8 +31,11 @@ def parser():
     extract = commands.add_parser("extract", help="Extract and validate Update.img; no USB")
     extract.add_argument("source", type=Path, help="Official Windows ZIP/EXE or Update.img")
     extract.add_argument("--output", type=Path, required=True, help="New output directory")
-    for command in ("inspect", "plan"):
-        sub = commands.add_parser(command, help="Validate bundle and print metadata; no USB")
+    for command, help_text in (
+        ("inspect", "Validate bundle and print metadata; no USB"),
+        ("plan", "Validate bundle and show the update sequence; no USB"),
+    ):
+        sub = commands.add_parser(command, help=help_text)
         add_bundle(sub)
     probe = commands.add_parser("probe", help="Read-only bootloader queries")
     probe.add_argument("--serial")
@@ -44,42 +48,16 @@ def parser():
     return result
 
 
-def describe(bundle):
-    return {
-        "version": "2.7",
-        "description": bundle.description,
-        "sha256": bundle.sha256,
-        "images": [
-            {"partition": item.partition, "compressed_bytes": len(item.compressed),
-             "bytes": EXPECTED_SIZES[item.partition], "compressed_sha1": item.sha1}
-            for item in bundle.images
-        ],
-    }
-
-
 def run(args):
     if args.command == "extract":
-        if args.output.exists():
-            raise BundleError("Output directory must not already exist")
-        # Work in an adjacent staging directory, publishing only validated files.
-        import tempfile
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=args.output.parent, prefix=".mx5-") as temp:
-            stage = Path(temp) / "firmware"
-            stage.mkdir()
-            extract_container(args.source, stage / "Update.img")
-            bundle = Bundle.load(stage / "Update.img")
-            for image in bundle.images:
-                (stage / f"{image.partition}.img").write_bytes(image.unpack())
-            (stage / "manifest.json").write_text(json.dumps(describe(bundle), indent=2) + "\n")
-            stage.rename(args.output)
+        extract_firmware(args.source, args.output)
         print(f"Validated and extracted firmware to {args.output}")
         return
-    if hasattr(args, "bundle") and args.bundle is None:
+    if args.command != "probe" and args.bundle is None:
         raise BundleError("Supply an Update.img path or set MX5_FIRMWARE")
-    bundle = Bundle.load(args.bundle) if hasattr(args, "bundle") else None
+    bundle = Bundle.load(args.bundle) if args.bundle is not None else None
     if args.command in {"inspect", "plan"}:
-        metadata = describe(bundle)
+        metadata = bundle.metadata()
         if args.command == "plan":
             metadata["plan"] = [
                 "Read-only device, external-power, partition, and transfer-limit checks",
@@ -135,6 +113,6 @@ def main(argv=None):
                 file=sys.stderr,
             )
         return 1
-    except (KeyboardInterrupt, EOFError):
+    except KeyboardInterrupt:
         print("Interrupted; no further commands sent.", file=sys.stderr)
         return 130

@@ -1,6 +1,7 @@
 """Strict, bounded reader for the MX5 v2.7 FDT firmware container."""
 
 import hashlib
+import json
 import lzma
 import shutil
 import struct
@@ -144,6 +145,22 @@ class Bundle:
     description: str
     images: tuple[Image, ...]
 
+    def metadata(self) -> dict:
+        return {
+            "version": "2.7",
+            "description": self.description,
+            "sha256": self.sha256,
+            "images": [
+                {
+                    "partition": image.partition,
+                    "compressed_bytes": len(image.compressed),
+                    "bytes": EXPECTED_SIZES[image.partition],
+                    "compressed_sha1": image.sha1,
+                }
+                for image in self.images
+            ],
+        }
+
     @classmethod
     def load(cls, path: Path) -> "Bundle":
         if path.stat().st_size > MAX_BUNDLE:
@@ -189,7 +206,7 @@ class Bundle:
         return cls(digest, cstring(root["description"]), tuple(images))
 
 
-def extract_container(source: Path, destination: Path) -> None:
+def extract_container(source: Path, destination: Path) -> Bundle:
     """Extract Update.img only, never execute the vendor's EXE."""
     if destination.exists():
         raise BundleError(f"Refusing to overwrite {destination}")
@@ -228,7 +245,23 @@ def extract_container(source: Path, destination: Path) -> None:
                 raise BundleError("7-Zip extraction timed out") from exc
             except FileNotFoundError as exc:
                 raise BundleError("Install 7zz (7-Zip) to extract the Windows updater") from exc
-        Bundle.load(target)
+        bundle = Bundle.load(target)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with destination.open("xb") as output:
             output.write(target.read_bytes())
+        return bundle
+
+
+def extract_firmware(source: Path, output: Path) -> None:
+    """Publish the validated bundle, raw images, and manifest together."""
+    if output.exists():
+        raise BundleError(f"Output directory must not already exist: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent, prefix=".mx5-") as temp:
+        stage = Path(temp) / "firmware"
+        stage.mkdir()
+        bundle = extract_container(source, stage / "Update.img")
+        for image in bundle.images:
+            (stage / f"{image.partition}.img").write_bytes(image.unpack())
+        (stage / "manifest.json").write_text(json.dumps(bundle.metadata(), indent=2) + "\n")
+        stage.rename(output)

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import lzma
 import struct
 import tempfile
@@ -13,6 +14,7 @@ from mx5_update.bundle import (
     BundleError,
     decompress,
     extract_container,
+    extract_firmware,
     read_fdt,
 )
 
@@ -160,3 +162,43 @@ class BundleTests(unittest.TestCase):
                 archive.writestr("two.exe", b"two")
             with self.assertRaises(BundleError):
                 extract_container(source, Path(directory) / "Update.img")
+
+    def test_extract_firmware_publishes_images_and_manifest(self):
+        data = fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.img"
+            source.write_bytes(data)
+            output = Path(directory) / "firmware"
+            with (
+                patch("mx5_update.bundle.KNOWN_SHA256", hashlib.sha256(data).hexdigest()),
+                patch.dict(EXPECTED_SIZES, {name: 4 for name in EXPECTED_SIZES}),
+            ):
+                extract_firmware(source, output)
+            self.assertEqual((output / "Update.img").read_bytes(), data)
+            for partition in EXPECTED_SIZES:
+                self.assertEqual((output / f"{partition}.img").read_bytes(), b"test")
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(manifest["version"], "2.7")
+            self.assertEqual(manifest["sha256"], hashlib.sha256(data).hexdigest())
+            self.assertEqual([image["bytes"] for image in manifest["images"]], [4, 4, 4])
+            self.assertEqual(set(Path(directory).iterdir()), {source, output})
+
+    def test_extract_firmware_failure_leaves_no_partial_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.img"
+            source.write_bytes(b"invalid")
+            output = Path(directory) / "firmware"
+            with self.assertRaises(BundleError):
+                extract_firmware(source, output)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [source])
+
+    def test_extract_firmware_does_not_replace_existing_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "firmware"
+            output.mkdir()
+            marker = output / "keep"
+            marker.write_text("existing")
+            with self.assertRaises(BundleError):
+                extract_firmware(Path("missing"), output)
+            self.assertEqual(marker.read_text(), "existing")

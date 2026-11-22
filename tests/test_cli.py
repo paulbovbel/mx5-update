@@ -2,6 +2,7 @@ import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from mx5_update.cli import main, parser
@@ -39,8 +40,7 @@ class CLITests(unittest.TestCase):
 
     def test_no_usb_on_offline_inspect(self):
         with (
-            patch("mx5_update.cli.Bundle.load", return_value=None),
-            patch("mx5_update.cli.describe", return_value={}),
+            patch("mx5_update.cli.Bundle.load", return_value=SimpleNamespace(metadata=dict)),
             patch("mx5_update.cli.USB") as usb,
             redirect_stdout(io.StringIO()),
         ):
