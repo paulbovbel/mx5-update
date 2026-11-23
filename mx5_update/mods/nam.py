@@ -7,10 +7,11 @@ from pathlib import Path
 
 from ..bundle import MAX_BUNDLE, BundleError, Image, read_fdt
 from ..filesystem import Filesystem, run
+from . import SOURCES
 
 NAME = "nam"
-COMMIT = "cf70ea7efc38badb2782136cc74a760f00252e86"
-SOURCE = "https://github.com/lolgab/mods-for-legacy-headrush"
+COMMIT = SOURCES[NAME]["revision"]
+SOURCE = SOURCES[NAME]["source"]
 WRITES = {
     "/usr/Evil/Evil", "/usr/Evil/Scripts/evil",
     "/usr/Evil/libnam_hook.so", "/usr/Evil/libnam_preload.so",

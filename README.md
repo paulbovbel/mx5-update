@@ -165,5 +165,10 @@ without Nix, run tests with `python3 -m unittest discover -s tests`.
 
 The mod pipeline is in `mx5_update/compose.py`, with adapters in
 `mx5_update/mods/` and pinned sources/tools in `nix/mods/`. Profiles are explicit
-adapter sequences, not dynamically loaded plugins. Filesystem operations and
+adapter sequences, not dynamically loaded plugins. Upstream mod source pins live
+in `mx5_update/mods/sources.json`, read by Nix for fetching and Python for
+provenance. Nix owns fetching, tool builds, dependencies and packaging; Python
+owns patch ordering, application, validation and artifact publication. Build-only
+dependencies (such as NAM's compiler and libraries) remain pinned in Nix.
+Filesystem operations and
 artifact generation are shared; Fastboot flashing remains a separate shell script.

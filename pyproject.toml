@@ -20,5 +20,8 @@ mx5-extract-firmware = "mx5_update.extract:main"
 [tool.setuptools.packages.find]
 include = ["mx5_update*"]
 
+[tool.setuptools.package-data]
+"mx5_update.mods" = ["sources.json"]
+
 [tool.setuptools]
 script-files = ["scripts/mx5-flash"]

@@ -14,6 +14,7 @@
   python3,
 }:
 let
+  pin = (builtins.fromJSON (builtins.readFile ../../mx5_update/mods/sources.json)).nam;
   toolchain = stdenvNoCC.mkDerivation {
     pname = "bootlin-armv7-toolchain";
     version = "2020.08-1";
@@ -55,11 +56,11 @@ let
 in
 stdenv.mkDerivation {
   pname = "headrush-nam-cli";
-  version = "cf70ea7efc38badb2782136cc74a760f00252e86";
+  version = pin.revision;
   src = fetchurl {
-    name = "headrush-nam-cf70ea7efc38badb2782136cc74a760f00252e86.tar.gz";
-    url = "https://codeload.github.com/lolgab/mods-for-legacy-headrush/tar.gz/cf70ea7efc38badb2782136cc74a760f00252e86";
-    hash = "sha256-JMAQFiJ7zpZaQyX5Ud4HVkWDs6H3H+Wt1c0V/Ob88fU=";
+    name = "headrush-nam-${pin.revision}.tar.gz";
+    url = "${pin.archive}/${pin.revision}";
+    inherit (pin) hash;
   };
   nativeBuildInputs = [ cmake python3 ];
   buildInputs = [ e2fsprogs util-linux curl xz ];

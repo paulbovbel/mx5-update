@@ -1,11 +1,14 @@
 { lib, stdenvNoCC, fetchurl }:
+let
+  pin = (builtins.fromJSON (builtins.readFile ../../mx5_update/mods/sources.json)).bridge;
+in
 stdenvNoCC.mkDerivation {
   pname = "mx-edit-source";
-  version = "c2ef5344fb01a1a4b2ee3356c1b4d040b8af9688";
+  version = pin.revision;
   src = fetchurl {
-    name = "mx-edit-c2ef5344fb01a1a4b2ee3356c1b4d040b8af9688.tar.gz";
-    url = "https://codeload.github.com/TicT4x/MX-Edit/tar.gz/c2ef5344fb01a1a4b2ee3356c1b4d040b8af9688";
-    hash = "sha256-v93AHxgQHuE2u8ruYQpW+1ytoWdTSthGhVU3ggLD0zc=";
+    name = "mx-edit-${pin.revision}.tar.gz";
+    url = "${pin.archive}/${pin.revision}";
+    inherit (pin) hash;
   };
   dontConfigure = true;
   dontBuild = true;

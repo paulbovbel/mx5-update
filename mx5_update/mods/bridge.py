@@ -5,11 +5,12 @@ from pathlib import Path
 
 from ..bundle import BundleError
 from ..filesystem import Filesystem
+from . import SOURCES
 
 NAME = "bridge"
-COMMIT = "c2ef5344fb01a1a4b2ee3356c1b4d040b8af9688"
+COMMIT = SOURCES[NAME]["revision"]
 VERSION = "0.7"
-SOURCE = "https://github.com/TicT4x/MX-Edit"
+SOURCE = SOURCES[NAME]["source"]
 SCRIPT_NAMES = (
     "usb-otg-audio-start.sh", "usb-otg-audio-stop.sh", "mx5bridge-diag.sh",
     "mx5bridge-usb.sh", "mx5bridge-db.sh", "mx5bridge-sqlite3",
